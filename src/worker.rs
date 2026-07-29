@@ -1,302 +1,294 @@
 use std::{
     cell::UnsafeCell,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize},
-    },
+    mem::MaybeUninit,
+    sync::{Arc, atomic::AtomicUsize},
+    thread,
 };
 
+use crate::{syncwaker::SyncWaker, wakers::Wakers};
+
+#[derive(Debug)]
+pub enum Error<T> {
+    RecvError,
+    SendError(T),
+    Closed,
+    Full(T),
+    Empty,
+}
+
+pub trait WakeSignal {
+    /// Wakesup the signal
+    fn wake(&self) -> bool;
+}
+
 struct Data<T> {
-    send_buffer: Vec<T>,
-    stand_by: Option<Vec<T>>,
-    recv_buffer: Option<Vec<T>>,
+    stamp: AtomicUsize,
+    data: UnsafeCell<MaybeUninit<T>>,
 }
 
 pub struct Channel<T> {
-    lock: AtomicBool,
-    data: UnsafeCell<Data<T>>,
-    senders: AtomicUsize,
-    receivers: AtomicUsize,
+    head: AtomicUsize,
+    tail: AtomicUsize,
+    slots: Box<[Data<T>]>,
+    capacity: usize,
+    send_wakers: Wakers,
+    recv_wakers: Wakers,
 }
 
 unsafe impl<T: Send> Send for Channel<T> {}
 unsafe impl<T: Send> Sync for Channel<T> {}
 
-
 impl<T> Channel<T> {
-    pub fn new() -> Self {
+    pub fn new(capacity: usize) -> Self {
+        let slots = (0..capacity)
+            .map(|i| Data {
+                stamp: AtomicUsize::new(i),
+                data: UnsafeCell::new(MaybeUninit::uninit()),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
         Channel {
-            lock: AtomicBool::new(false),
-            senders: AtomicUsize::new(1),
-            receivers: AtomicUsize::new(1),
-            data: UnsafeCell::new(Data {
-                send_buffer: Vec::new(),
-                stand_by: Some(Vec::new()),
-                recv_buffer: None,
-            }),
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+            slots,
+            capacity,
+            send_wakers: Wakers::new(),
+            recv_wakers: Wakers::new(),
         }
     }
 
-    pub fn with_capacity(capacity: usize) -> Self {
-        Channel {
-            lock: AtomicBool::new(false),
-            data: UnsafeCell::new(Data {
-                send_buffer: Vec::with_capacity(capacity),
-                stand_by: Some(Vec::with_capacity(capacity)),
-                recv_buffer: None,
-            }),
-            senders: AtomicUsize::new(1),
-            receivers: AtomicUsize::new(1),
+    pub fn register_sender_waker(&self, waker: Box<dyn WakeSignal>) {
+        let guard = self.send_wakers.lock();
+        let senders = unsafe { &mut *guard.wakers.wakers.get() };
+        senders.push(waker);
+    }
+
+    pub fn register_receiver_waker(&self, waker: Box<dyn WakeSignal>) {
+        let guard = self.recv_wakers.lock();
+        let receivers = unsafe { &mut *guard.wakers.wakers.get() };
+        receivers.push(waker);
+    }
+
+    fn wake_sender(&self) {
+        let guard = self.send_wakers.lock();
+        let senders = unsafe { &mut *guard.wakers.wakers.get() };
+        for waker in senders.drain(..) {
+            if waker.wake() {
+                return;
+            }
         }
     }
-    fn acquire_lock(&self) {
-        loop {
-            for _ in 0..100 {
-                if self
-                    .lock
-                    .compare_exchange(
-                        false,
-                        true,
-                        std::sync::atomic::Ordering::Acquire,
-                        std::sync::atomic::Ordering::Relaxed,
-                    )
-                    .is_ok()
-                {
-                    return;
+
+    fn wake_receiver(&self) {
+        let guard = self.recv_wakers.lock();
+        let receivers = unsafe { &mut *guard.wakers.wakers.get() };
+        for waker in receivers.drain(..) {
+            if waker.wake() {
+                return;
+            }
+        }
+    }
+
+    pub fn try_send(&self, item: T) -> Result<(), Error<T>> {
+        if self.capacity == 0 {
+            return Err(Error::Full(item));
+        }
+
+        let pos = self.tail.load(std::sync::atomic::Ordering::Acquire);
+        let index = pos % self.capacity;
+        let slot = &self.slots[index];
+        let slot_seq = slot.stamp.load(std::sync::atomic::Ordering::Acquire);
+        if slot_seq == pos {
+            if self
+                .tail
+                .compare_exchange_weak(
+                    pos,
+                    pos + 1,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                unsafe {
+                    (*slot.data.get()).write(item);
                 }
 
-                std::hint::spin_loop();
-            }
-            std::thread::yield_now();
-        }
-    }
-
-    fn release_lock(&self) {
-        self.lock.store(false, std::sync::atomic::Ordering::Release);
-    }
-
-    fn send(&self, item: T) {
-        self.acquire_lock();
-        unsafe {
-            let data = self.data.get();
-            (*data).send_buffer.push(item);
-            if let Some(mut stand_by_buffer) = (*data).stand_by.take() {
-                std::mem::swap(&mut (*data).send_buffer, &mut stand_by_buffer);
-                (*data).recv_buffer = Some(stand_by_buffer);
+                slot.stamp
+                    .store(pos + 1, std::sync::atomic::Ordering::Release);
+                self.wake_receiver();
+                return Ok(());
+            } else if slot_seq.wrapping_sub(pos) >= self.capacity {
+                return Err(Error::Full(item));
             }
         }
-        self.release_lock();
+
+        return Err(Error::SendError(item));
     }
 
-    fn recv(&self) -> Option<Vec<T>> {
-        self.acquire_lock();
-        let recv_buffer = unsafe {
-            let data = self.data.get();
-            (*data).recv_buffer.take()
-        };
-        self.release_lock();
-        recv_buffer
-    }
+    pub fn try_recv(&self) -> Result<T, Error<T>> {
+        let pos = self.head.load(std::sync::atomic::Ordering::Acquire);
+        let index = pos % self.capacity;
+        let slot = &self.slots[index];
+        let slot_seq = slot.stamp.load(std::sync::atomic::Ordering::Acquire);
+        if slot_seq == pos + 1 {
+            if self
+                .head
+                .compare_exchange_weak(
+                    pos,
+                    pos + 1,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                let val = unsafe { (*slot.data.get()).assume_init_read() };
 
-    fn ack(&self, mut buf: Vec<T>) {
-        self.acquire_lock();
-        unsafe {
-            let data = self.data.get();
-            if !(*data).send_buffer.is_empty() {
-                std::mem::swap(&mut (*data).send_buffer, &mut buf);
-                (*data).recv_buffer = Some(buf);
-            } else {
-                (*data).stand_by = Some(buf);
+                slot.stamp
+                    .store(pos + self.capacity, std::sync::atomic::Ordering::Release);
+                self.wake_sender();
+                return Ok(val);
             }
+        } else {
+            return Err(Error::Empty);
         }
-        self.release_lock();
+        return Err(Error::RecvError);
     }
 }
 
-#[derive(Clone)]
 pub struct Sender<T> {
-    channel: Arc<Channel<T>>,
+    chan: Arc<Channel<T>>,
 }
-
 impl<T> Sender<T> {
-    pub fn send(&self, item: T) {
-        self.channel.send(item);
-    }
-
-    pub fn clone(&self) -> Self {
-        Sender {
-            channel: self.channel.clone(),
+    pub fn send(&self, item: T) -> Result<(), Error<T>> {
+        let mut val = item;
+        loop {
+            match self.chan.try_send(val) {
+                Ok(_) => return Ok(()),
+                Err(Error::Full(t)) => {
+                    val = t;
+                    let waker = Box::new(SyncWaker::new());
+                    self.chan.register_sender_waker(waker);
+                    thread::park();
+                }
+                Err(Error::SendError(T)) => {
+                    val = T;
+                }
+                res => return res,
+            }
         }
     }
 }
 
-impl<T> Drop for Sender<T> {
-    fn drop(&mut self) {
-        self.channel
-            .senders
-            .fetch_sub(1, std::sync::atomic::Ordering::Release);
+impl<T> Clone for Sender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            chan: self.chan.clone(),
+        }
     }
 }
 
-#[derive(Clone)]
 pub struct Receiver<T> {
-    channel: Arc<Channel<T>>,
+    chan: Arc<Channel<T>>,
 }
 
 impl<T> Receiver<T> {
-    pub fn recv(&self) -> Option<Vec<T>> {
-        self.channel.recv()
-    }
-
-    pub fn ack(&self, buf: Vec<T>) {
-        self.channel.ack(buf);
+    pub fn recv(&self) -> Result<T, Error<T>> {
+        loop {
+            match self.chan.try_recv() {
+                Ok(val) => return Ok(val),
+                Err(Error::Empty) => {
+                    let waker = Box::new(SyncWaker::new());
+                    self.chan.register_receiver_waker(waker);
+                    thread::park();
+                }
+                Err(Error::RecvError) => {}
+                res => return res,
+            }
+        }
     }
 }
 
-impl<T> Drop for Receiver<T> {
-    fn drop(&mut self) {
-        self.channel
-            .receivers
-            .fetch_sub(1, std::sync::atomic::Ordering::Release);
+impl<T> Clone for Receiver<T> {
+    fn clone(&self) -> Self {
+        Self {
+            chan: self.chan.clone(),
+        }
     }
 }
 
-pub fn new_channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
-    let channel = Arc::new(Channel::with_capacity(capacity));
+pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
+    let chan = Arc::new(Channel::new(capacity));
     (
-        Sender {
-            channel: channel.clone(),
-        },
-        Receiver { channel },
-    )
-}
-
-pub fn new_unbounded_channel<T>() -> (Sender<T>, Receiver<T>) {
-    let channel = Arc::new(Channel::new());
-    (
-        Sender {
-            channel: channel.clone(),
-        },
-        Receiver { channel },
+        Sender { chan: chan.clone() },
+        Receiver { chan: chan.clone() },
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
 
     #[test]
-    fn test_channel() {
-        let (sender, receiver) = new_channel::<i32>(10);
-        sender.send(1);
-        sender.send(2);
-        let recv = receiver.recv();
-        assert_eq!(recv, Some(vec![1]));
-        receiver.ack(vec![]);
-        let recv = receiver.recv();
-        assert_eq!(recv, Some(vec![2]));
-        receiver.ack(vec![]);
-        let recv = receiver.recv();
-        assert_eq!(recv, None);
+    fn try_send_and_try_recv_round_trip() {
+        let (sender, receiver) = channel(2);
+
+        assert!(sender.send(7).is_ok());
+        assert_eq!(receiver.recv().unwrap(), 7);
+        assert!(sender.send(42).is_ok());
+        assert!(matches!(receiver.recv().unwrap(), 42));
     }
 
     #[test]
-    fn test_channel_multiple_senders() {
-        let (sender1, receiver) = new_channel::<i32>(10);
-        let sender2 = sender1.clone();
-        sender1.send(1);
-        sender2.send(2);
-        let recv = receiver.recv();
-        assert_eq!(recv, Some(vec![1]));
-        receiver.ack(vec![]);
-        let recv = receiver.recv();
-        assert_eq!(recv, Some(vec![2]));
-        receiver.ack(vec![]);
-        let recv = receiver.recv();
-        assert_eq!(recv, None);
+    fn sender_send_and_recv_work_across_threads() {
+        let (sender, receiver) = channel(1);
+        let sender_clone = sender.clone();
+        let receiver_clone = receiver.clone();
+
+        let handle = thread::spawn(move || sender_clone.send(42));
+
+        let received = receiver_clone.recv();
+        let send_result = handle.join().unwrap();
+
+        assert_eq!(received.unwrap(), 42);
+        assert!(send_result.is_ok());
     }
 
     #[test]
-    fn test_channel_multiple_receivers() {
-        let (sender, receiver1) = new_channel::<i32>(10);
-        let receiver2 = receiver1.clone();
-        sender.send(1);
-        sender.send(2);
-        let recv = receiver1.recv();
-        assert_eq!(recv, Some(vec![1]));
-        receiver1.ack(vec![]);
-        let recv = receiver2.recv();
-        assert_eq!(recv, Some(vec![2]));
-        receiver2.ack(vec![]);
-        let recv = receiver1.recv();
-        assert_eq!(recv, None);
-    }
+    fn multiple_threads_can_send_and_receive_items() {
+        let (sender, receiver) = channel(3);
+        let mut send_handles = Vec::new();
+        let mut recv_handles = Vec::new();
 
-    #[test]
-    fn test_channel_multiple_senders_and_receivers() {
-        let (sender1, receiver1) = new_channel::<i32>(10);
-        let sender2 = sender1.clone();
-        let receiver2 = receiver1.clone();
-        sender1.send(1);
-        sender2.send(2);
-        let recv = receiver1.recv();
-        assert_eq!(recv, Some(vec![1]));
-        receiver1.ack(vec![]);
-        let recv = receiver2.recv();
-        assert_eq!(recv, Some(vec![2]));
-        receiver2.ack(vec![]);
-        let recv = receiver1.recv();
-        assert_eq!(recv, None);
-    }
+        for value in 0..4usize {
+            let sender_clone = sender.clone();
+            send_handles.push(thread::spawn(move || {
+                sender_clone.send(value).unwrap();
+                println!("val send");
+                value
+            }));
+        }
 
-    #[test]
-    fn test_channel_multiple_senders_and_receivers_with_buffer() {
-        let (sender1, receiver1) = new_channel::<i32>(10);
-        let sender2 = sender1.clone();
-        let receiver2 = receiver1.clone();
-        sender1.send(1);
-        sender2.send(2);
-        let recv = receiver1.recv();
-        assert_eq!(recv, Some(vec![1]));
-        receiver1.ack(vec![]);
-        let recv = receiver2.recv();
-        assert_eq!(recv, Some(vec![2]));
-        receiver2.ack(vec![]);
-        let recv = receiver1.recv();
-        assert_eq!(recv, None);
-    }
+        for _ in 0..4 {
+            let receiver_clone = receiver.clone();
+            recv_handles.push(thread::spawn(move || {
+                let val = receiver_clone.recv().unwrap();
+                println!("val recv");
+                val
+            }));
+        }
 
-    #[test]
-    fn test_channel_stress() {
-        let (sender1, receiver1) = new_channel::<i32>(10);
-        let sender2 = sender1.clone();
-        let receiver2 = receiver1.clone();
-        sender1.send(1);
-        sender2.send(2);
-        let recv = receiver1.recv();
-        assert_eq!(recv, Some(vec![1]));
-        receiver1.ack(vec![]);
-        let recv = receiver2.recv();
-        assert_eq!(recv, Some(vec![2]));
-        receiver2.ack(vec![]);
-        let recv = receiver1.recv();
-        assert_eq!(recv, None);
-    }
+        let mut received_values = Vec::new();
+        for handle in recv_handles {
+            received_values.push(handle.join().unwrap());
+        }
 
-    #[test]
-    fn test_channel_stress_with_ack() {
-        let (sender1, receiver1) = new_channel::<i32>(10);
-        let sender2 = sender1.clone();
-        let receiver2 = receiver1.clone();
-        sender1.send(1);
-        sender2.send(2);
-        let recv = receiver1.recv();
-        assert_eq!(recv, Some(vec![1]));
-        receiver1.ack(vec![]);
-        let recv = receiver2.recv();
-        assert_eq!(recv, Some(vec![2]));
-        receiver2.ack(vec![]);
-        let recv = receiver1.recv();
-        assert_eq!(recv, None);
+        let mut sent_values = Vec::new();
+        for handle in send_handles {
+            sent_values.push(handle.join().unwrap());
+        }
+
+        assert_eq!(received_values.len(), sent_values.len());
     }
 }

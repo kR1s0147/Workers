@@ -1,3 +1,4 @@
+use ::worker::worker::channel;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -63,7 +64,7 @@ struct BenchResult {
 
 fn run_worker_spsc(capacity: usize, count: usize) -> (Duration, usize, usize, usize) {
     // Warmup / setup allocator state
-    let (tx, rx) = worker::new_channel::<usize>(capacity);
+    let (tx, rx) = channel::<usize>(capacity);
     let start_current = CURRENT_ALLOCATED.load(Ordering::SeqCst);
     PEAK_ALLOCATED.store(start_current, Ordering::SeqCst);
     let start_total = TOTAL_ALLOCATED.load(Ordering::SeqCst);
@@ -101,11 +102,19 @@ fn run_worker_spsc(capacity: usize, count: usize) -> (Duration, usize, usize, us
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
-fn run_worker_mpsc(capacity: usize, count: usize, num_senders: usize) -> (Duration, usize, usize, usize) {
+fn run_worker_mpsc(
+    capacity: usize,
+    count: usize,
+    num_senders: usize,
+) -> (Duration, usize, usize, usize) {
     let (tx, rx) = worker::new_channel::<usize>(capacity);
     let items_per_sender = count / num_senders;
     let total_expected = items_per_sender * num_senders;
@@ -151,11 +160,19 @@ fn run_worker_mpsc(capacity: usize, count: usize, num_senders: usize) -> (Durati
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
-fn run_worker_spmc(capacity: usize, count: usize, num_receivers: usize) -> (Duration, usize, usize, usize) {
+fn run_worker_spmc(
+    capacity: usize,
+    count: usize,
+    num_receivers: usize,
+) -> (Duration, usize, usize, usize) {
     let (tx, rx) = worker::new_channel::<usize>(capacity);
     let total_received = Arc::new(AtomicUsize::new(0));
 
@@ -203,7 +220,11 @@ fn run_worker_spmc(capacity: usize, count: usize, num_receivers: usize) -> (Dura
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
@@ -266,13 +287,20 @@ fn run_worker_mpmc(
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
 // --- Flume Channel Benchmarks (Blocking) ---
 
-fn run_flume_blocking_spsc(bounded: Option<usize>, count: usize) -> (Duration, usize, usize, usize) {
+fn run_flume_blocking_spsc(
+    bounded: Option<usize>,
+    count: usize,
+) -> (Duration, usize, usize, usize) {
     let (tx, rx) = match bounded {
         Some(cap) => flume::bounded::<usize>(cap),
         None => flume::unbounded::<usize>(),
@@ -313,7 +341,11 @@ fn run_flume_blocking_spsc(bounded: Option<usize>, count: usize) -> (Duration, u
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
@@ -368,7 +400,11 @@ fn run_flume_blocking_mpsc(
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
@@ -421,7 +457,11 @@ fn run_flume_blocking_spmc(
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
@@ -481,7 +521,11 @@ fn run_flume_blocking_mpmc(
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
@@ -528,7 +572,11 @@ fn run_flume_polling_spsc(bounded: Option<usize>, count: usize) -> (Duration, us
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
@@ -583,7 +631,11 @@ fn run_flume_polling_mpsc(
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
@@ -636,7 +688,11 @@ fn run_flume_polling_spmc(
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
@@ -696,11 +752,19 @@ fn run_flume_polling_mpmc(
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
-fn run_worker_busy_receiver(capacity: usize, count: usize, sleep_ms: u64) -> (Duration, usize, usize, usize) {
+fn run_worker_busy_receiver(
+    capacity: usize,
+    count: usize,
+    sleep_ms: u64,
+) -> (Duration, usize, usize, usize) {
     let (tx, rx) = worker::new_channel::<usize>(capacity);
 
     let start_current = CURRENT_ALLOCATED.load(Ordering::SeqCst);
@@ -742,11 +806,19 @@ fn run_worker_busy_receiver(capacity: usize, count: usize, sleep_ms: u64) -> (Du
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
-fn run_flume_busy_receiver(bounded: Option<usize>, count: usize, sleep_ms: u64) -> (Duration, usize, usize, usize) {
+fn run_flume_busy_receiver(
+    bounded: Option<usize>,
+    count: usize,
+    sleep_ms: u64,
+) -> (Duration, usize, usize, usize) {
     let (tx, rx) = match bounded {
         Some(cap) => flume::bounded::<usize>(cap),
         None => flume::unbounded::<usize>(),
@@ -797,7 +869,11 @@ fn run_flume_busy_receiver(bounded: Option<usize>, count: usize, sleep_ms: u64) 
         duration,
         end_count - start_count,
         end_total - start_total,
-        if end_peak >= start_current { end_peak - start_current } else { 0 },
+        if end_peak >= start_current {
+            end_peak - start_current
+        } else {
+            0
+        },
     )
 }
 
@@ -829,35 +905,86 @@ fn print_results(title: &str, results: &[BenchResult], total_messages: usize) {
 
 fn main() {
     let count = 1_000_000;
-    println!("Running Channel Benchmarks with {} messages per topology", count);
+    println!(
+        "Running Channel Benchmarks with {} messages per topology",
+        count
+    );
 
     // --- SPSC Topology (1 Sender, 1 Receiver) ---
     {
         let mut results = Vec::new();
 
         let (d, a, b, p) = run_worker_spsc(1000, count);
-        results.push(BenchResult { name: "Worker (Cap 1,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 1,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_worker_spsc(10000, count);
-        results.push(BenchResult { name: "Worker (Cap 10,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 10,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_spsc(Some(1000), count);
-        results.push(BenchResult { name: "Flume Bounded 1,000 (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 1,000 (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_spsc(Some(10000), count);
-        results.push(BenchResult { name: "Flume Bounded 10,000 (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 10,000 (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_spsc(None, count);
-        results.push(BenchResult { name: "Flume Unbounded (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Unbounded (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_spsc(Some(1000), count);
-        results.push(BenchResult { name: "Flume Bounded 1,000 (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 1,000 (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_spsc(Some(10000), count);
-        results.push(BenchResult { name: "Flume Bounded 10,000 (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 10,000 (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_spsc(None, count);
-        results.push(BenchResult { name: "Flume Unbounded (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Unbounded (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         print_results("SPSC Topology (1 Sender, 1 Receiver)", &results, count);
     }
@@ -868,28 +995,76 @@ fn main() {
         let senders = 4;
 
         let (d, a, b, p) = run_worker_mpsc(1000, count, senders);
-        results.push(BenchResult { name: "Worker (Cap 1,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 1,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_worker_mpsc(10000, count, senders);
-        results.push(BenchResult { name: "Worker (Cap 10,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 10,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_mpsc(Some(1000), count, senders);
-        results.push(BenchResult { name: "Flume Bounded 1,000 (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 1,000 (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_mpsc(Some(10000), count, senders);
-        results.push(BenchResult { name: "Flume Bounded 10,000 (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 10,000 (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_mpsc(None, count, senders);
-        results.push(BenchResult { name: "Flume Unbounded (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Unbounded (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_mpsc(Some(1000), count, senders);
-        results.push(BenchResult { name: "Flume Bounded 1,000 (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 1,000 (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_mpsc(Some(10000), count, senders);
-        results.push(BenchResult { name: "Flume Bounded 10,000 (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 10,000 (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_mpsc(None, count, senders);
-        results.push(BenchResult { name: "Flume Unbounded (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Unbounded (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         print_results("MPSC Topology (4 Senders, 1 Receiver)", &results, count);
     }
@@ -900,28 +1075,76 @@ fn main() {
         let receivers = 4;
 
         let (d, a, b, p) = run_worker_spmc(1000, count, receivers);
-        results.push(BenchResult { name: "Worker (Cap 1,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 1,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_worker_spmc(10000, count, receivers);
-        results.push(BenchResult { name: "Worker (Cap 10,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 10,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_spmc(Some(1000), count, receivers);
-        results.push(BenchResult { name: "Flume Bounded 1,000 (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 1,000 (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_spmc(Some(10000), count, receivers);
-        results.push(BenchResult { name: "Flume Bounded 10,000 (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 10,000 (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_spmc(None, count, receivers);
-        results.push(BenchResult { name: "Flume Unbounded (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Unbounded (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_spmc(Some(1000), count, receivers);
-        results.push(BenchResult { name: "Flume Bounded 1,000 (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 1,000 (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_spmc(Some(10000), count, receivers);
-        results.push(BenchResult { name: "Flume Bounded 10,000 (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 10,000 (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_spmc(None, count, receivers);
-        results.push(BenchResult { name: "Flume Unbounded (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Unbounded (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         print_results("SPMC Topology (1 Sender, 4 Receivers)", &results, count);
     }
@@ -933,28 +1156,76 @@ fn main() {
         let receivers = 4;
 
         let (d, a, b, p) = run_worker_mpmc(1000, count, senders, receivers);
-        results.push(BenchResult { name: "Worker (Cap 1,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 1,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_worker_mpmc(10000, count, senders, receivers);
-        results.push(BenchResult { name: "Worker (Cap 10,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 10,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_mpmc(Some(1000), count, senders, receivers);
-        results.push(BenchResult { name: "Flume Bounded 1,000 (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 1,000 (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_mpmc(Some(10000), count, senders, receivers);
-        results.push(BenchResult { name: "Flume Bounded 10,000 (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 10,000 (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_blocking_mpmc(None, count, senders, receivers);
-        results.push(BenchResult { name: "Flume Unbounded (Block)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Unbounded (Block)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_mpmc(Some(1000), count, senders, receivers);
-        results.push(BenchResult { name: "Flume Bounded 1,000 (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 1,000 (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_mpmc(Some(10000), count, senders, receivers);
-        results.push(BenchResult { name: "Flume Bounded 10,000 (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 10,000 (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_polling_mpmc(None, count, senders, receivers);
-        results.push(BenchResult { name: "Flume Unbounded (Poll)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Unbounded (Poll)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         print_results("MPMC Topology (4 Senders, 4 Receivers)", &results, count);
     }
@@ -965,20 +1236,54 @@ fn main() {
         let sleep_ms = 5;
 
         let (d, a, b, p) = run_worker_busy_receiver(1000, count, sleep_ms);
-        results.push(BenchResult { name: "Worker (Cap 1,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 1,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_worker_busy_receiver(10000, count, sleep_ms);
-        results.push(BenchResult { name: "Worker (Cap 10,000)", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Worker (Cap 10,000)",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_busy_receiver(Some(1000), count, sleep_ms);
-        results.push(BenchResult { name: "Flume Bounded 1,000", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 1,000",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_busy_receiver(Some(10000), count, sleep_ms);
-        results.push(BenchResult { name: "Flume Bounded 10,000", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Bounded 10,000",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
         let (d, a, b, p) = run_flume_busy_receiver(None, count, sleep_ms);
-        results.push(BenchResult { name: "Flume Unbounded", duration: d, allocations: a, allocated_bytes: b, peak_memory: p });
+        results.push(BenchResult {
+            name: "Flume Unbounded",
+            duration: d,
+            allocations: a,
+            allocated_bytes: b,
+            peak_memory: p,
+        });
 
-        print_results(&format!("Busy Receiver Scenario ({}ms processing delay)", sleep_ms), &results, count);
+        print_results(
+            &format!("Busy Receiver Scenario ({}ms processing delay)", sleep_ms),
+            &results,
+            count,
+        );
     }
 }
