@@ -5,7 +5,11 @@ use std::{
     thread,
 };
 
-use crate::{syncwaker::SyncWaker, wakers::Wakers};
+use crate::{
+    async_chan::{RecvFut, SendFut},
+    syncwaker::SyncWaker,
+    wakers::Wakers,
+};
 
 #[derive(Debug)]
 pub enum Error<T> {
@@ -95,7 +99,13 @@ impl<T> Channel<T> {
             return Err(Error::Full(item));
         }
 
-        let pos = self.tail.load(std::sync::atomic::Ordering::Acquire);
+        let head = self.head.load(std::sync::atomic::Ordering::Acquire);
+        let tail = self.tail.load(std::sync::atomic::Ordering::Acquire);
+        if tail.wrapping_sub(head) >= self.capacity {
+            return Err(Error::Full(item));
+        }
+
+        let pos = tail;
         let index = pos % self.capacity;
         let slot = &self.slots[index];
         let slot_seq = slot.stamp.load(std::sync::atomic::Ordering::Acquire);
@@ -118,8 +128,6 @@ impl<T> Channel<T> {
                     .store(pos + 1, std::sync::atomic::Ordering::Release);
                 self.wake_receiver();
                 return Ok(());
-            } else if slot_seq.wrapping_sub(pos) >= self.capacity {
-                return Err(Error::Full(item));
             }
         }
 
@@ -157,7 +165,7 @@ impl<T> Channel<T> {
 }
 
 pub struct Sender<T> {
-    chan: Arc<Channel<T>>,
+    pub chan: Arc<Channel<T>>,
 }
 impl<T> Sender<T> {
     pub fn send(&self, item: T) -> Result<(), Error<T>> {
@@ -171,12 +179,16 @@ impl<T> Sender<T> {
                     self.chan.register_sender_waker(waker);
                     thread::park();
                 }
-                Err(Error::SendError(T)) => {
-                    val = T;
+                Err(Error::SendError(t)) => {
+                    val = t;
                 }
                 res => return res,
             }
         }
+    }
+
+    pub fn send_async(&self, item: T) -> SendFut<'_, T> {
+        SendFut::new(self, Some(item))
     }
 }
 
@@ -189,7 +201,7 @@ impl<T> Clone for Sender<T> {
 }
 
 pub struct Receiver<T> {
-    chan: Arc<Channel<T>>,
+    pub chan: Arc<Channel<T>>,
 }
 
 impl<T> Receiver<T> {
@@ -206,6 +218,10 @@ impl<T> Receiver<T> {
                 res => return res,
             }
         }
+    }
+
+    pub fn recv_async(&self) -> RecvFut<'_, T> {
+        RecvFut::new(self)
     }
 }
 

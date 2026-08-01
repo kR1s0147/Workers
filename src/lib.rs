@@ -1,3 +1,5 @@
+pub mod async_chan;
+pub mod async_wakers;
 pub mod syncwaker;
 pub mod wakers;
 pub mod worker;
