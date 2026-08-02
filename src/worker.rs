@@ -173,14 +173,11 @@ impl<T> Sender<T> {
         loop {
             match self.chan.try_send(val) {
                 Ok(_) => return Ok(()),
-                Err(Error::Full(t)) => {
+                Err(Error::Full(t)) | Err(Error::SendError(t)) => {
                     val = t;
                     let waker = Box::new(SyncWaker::new());
                     self.chan.register_sender_waker(waker);
                     thread::park();
-                }
-                Err(Error::SendError(t)) => {
-                    val = t;
                 }
                 res => return res,
             }
@@ -209,12 +206,11 @@ impl<T> Receiver<T> {
         loop {
             match self.chan.try_recv() {
                 Ok(val) => return Ok(val),
-                Err(Error::Empty) => {
+                Err(Error::Empty) | Err(Error::RecvError) => {
                     let waker = Box::new(SyncWaker::new());
                     self.chan.register_receiver_waker(waker);
                     thread::park();
                 }
-                Err(Error::RecvError) => {}
                 res => return res,
             }
         }
